@@ -1,116 +1,90 @@
-@'
 -- 007_campaign_contrib.sql
-CREATE SCHEMA IF NOT EXISTS campaign;
+-- Phase 2: Contributions schema (contributors + contributions + indexes)
+-- NOTE: Keep this file deterministic. If you need to rerun, do so on a clean DB or wrap in migrations tooling.
 
--- Contacts
-CREATE TABLE IF NOT EXISTS campaign.contacts (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-  contact_type campaign.contact_type NOT NULL,
-  first_name text,
-  middle_name text,
-  last_name text,
-  suffix text,
-  org_name text,
+BEGIN;
 
-  address_line1 text,
-  address_line2 text,
-  city text,
-  state text,
-  zip text,
+-- Contributors (optional canonical table)
+CREATE TABLE IF NOT EXISTS campaign_contributor (
+  id                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 
-  phone text,
-  email text,
+  -- If you have a contacts table, you can map this later
+  contact_id         UUID NULL,
 
-  employer text,
-  occupation text,
-  occupation_other text,
+  first_name         TEXT NULL,
+  last_name          TEXT NULL,
+  organization_name  TEXT NULL,
 
-  external_contributor_id text,
+  email              TEXT NULL,
+  phone              TEXT NULL,
 
-  created_at timestamptz NOT NULL DEFAULT now(),
-  updated_at timestamptz NOT NULL DEFAULT now()
+  address1           TEXT NULL,
+  address2           TEXT NULL,
+  city               TEXT NULL,
+  state              TEXT NULL,
+  zip                TEXT NULL,
+
+  employer           TEXT NULL,
+  occupation         TEXT NULL,
+
+  created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at         TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+CREATE INDEX IF NOT EXISTS idx_campaign_contributor_contact_id
+  ON campaign_contributor(contact_id);
+
+CREATE INDEX IF NOT EXISTS idx_campaign_contributor_name
+  ON campaign_contributor(last_name, first_name);
 
 -- Contributions
-CREATE TABLE IF NOT EXISTS campaign.contributions (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+CREATE TABLE IF NOT EXISTS campaign_contribution (
+  id                   UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 
-  contribution_date date NOT NULL,
-  amount numeric(12,2) NOT NULL CHECK (amount >= 0),
+  -- external id used for SOS export + dedupe
+  external_contribution_id  TEXT NOT NULL UNIQUE,
 
-  contribution_type text NOT NULL,
-  election_type text NOT NULL,
-  contributor_type text NOT NULL,
+  contributor_id        UUID NULL REFERENCES campaign_contributor(id) ON DELETE SET NULL,
 
-  description text,
+  -- snapshot fields (keep even if contributor changes later)
+  contributor_name      TEXT NULL,
+  contributor_type      TEXT NOT NULL DEFAULT 'INDIVIDUAL', -- INDIVIDUAL | ORGANIZATION
+  address1              TEXT NULL,
+  address2              TEXT NULL,
+  city                  TEXT NULL,
+  state                 TEXT NULL,
+  zip                   TEXT NULL,
+  employer              TEXT NULL,
+  occupation            TEXT NULL,
 
-  status campaign.record_status NOT NULL DEFAULT 'draft',
-  source campaign.source NOT NULL DEFAULT 'manual',
-  validation_errors jsonb NOT NULL DEFAULT '[]'::jsonb,
+  amount_cents          INTEGER NOT NULL CHECK (amount_cents >= 0),
+  received_at           DATE NOT NULL,
 
-  contact_id uuid NOT NULL REFERENCES campaign.contacts(id) ON DELETE RESTRICT,
+  payment_method        TEXT NOT NULL DEFAULT 'UNKNOWN', -- CASH | CHECK | CARD | INKIND | OTHER | UNKNOWN
+  check_number          TEXT NULL,
+  in_kind_description   TEXT NULL,
 
-  external_contribution_id text NOT NULL UNIQUE,
-  filing_entity_id text,
+  memo                  TEXT NULL,
 
-  created_at timestamptz NOT NULL DEFAULT now(),
-  updated_at timestamptz NOT NULL DEFAULT now()
+  -- compliance flags
+  is_refund             BOOLEAN NOT NULL DEFAULT FALSE,
+  is_in_kind            BOOLEAN NOT NULL DEFAULT FALSE,
+
+  -- workflow
+  status                TEXT NOT NULL DEFAULT 'DRAFT', -- DRAFT | READY | EXPORTED | ERROR
+  validation_errors     JSONB NOT NULL DEFAULT '[]'::jsonb,
+
+  created_at            TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at            TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
--- Contribution Returns (optional in MVP UI, required for schema completeness)
-CREATE TABLE IF NOT EXISTS campaign.contribution_returns (
-  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+CREATE INDEX IF NOT EXISTS idx_campaign_contribution_received_at
+  ON campaign_contribution(received_at);
 
-  external_return_contribution_id text NOT NULL UNIQUE,
-  external_contribution_id text NOT NULL REFERENCES campaign.contributions(external_contribution_id) ON DELETE RESTRICT,
+CREATE INDEX IF NOT EXISTS idx_campaign_contribution_status
+  ON campaign_contribution(status);
 
-  contribution_return_date date NOT NULL,
-  contribution_return_amount numeric(12,2) NOT NULL CHECK (contribution_return_amount >= 0),
-  contribution_return_reason text,
+CREATE INDEX IF NOT EXISTS idx_campaign_contribution_contributor_id
+  ON campaign_contribution(contributor_id);
 
-  created_at timestamptz NOT NULL DEFAULT now(),
-  updated_at timestamptz NOT NULL DEFAULT now()
-);
-
--- Indexes
-CREATE INDEX IF NOT EXISTS idx_contacts_org_name ON campaign.contacts (org_name);
-CREATE INDEX IF NOT EXISTS idx_contacts_last_first ON campaign.contacts (last_name, first_name);
-CREATE INDEX IF NOT EXISTS idx_contrib_date ON campaign.contributions (contribution_date);
-CREATE INDEX IF NOT EXISTS idx_contrib_status ON campaign.contributions (status);
-CREATE INDEX IF NOT EXISTS idx_contrib_contact_id ON campaign.contributions (contact_id);
-
--- updated_at triggers (if not already created in phase 1, create helper function)
-DO $$
-BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_proc WHERE proname = 'set_updated_at' AND pg_namespace::regnamespace::text = 'campaign') THEN
-    CREATE OR REPLACE FUNCTION campaign.set_updated_at()
-    RETURNS TRIGGER AS $fn$
-    BEGIN
-      NEW.updated_at = now();
-      RETURN NEW;
-    END;
-    $fn$ LANGUAGE plpgsql;
-  END IF;
-END $$;
-
-DO $$
-BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_contacts_updated_at') THEN
-    CREATE TRIGGER trg_contacts_updated_at
-    BEFORE UPDATE ON campaign.contacts
-    FOR EACH ROW EXECUTE FUNCTION campaign.set_updated_at();
-  END IF;
-
-  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_contrib_updated_at') THEN
-    CREATE TRIGGER trg_contrib_updated_at
-    BEFORE UPDATE ON campaign.contributions
-    FOR EACH ROW EXECUTE FUNCTION campaign.set_updated_at();
-  END IF;
-
-  IF NOT EXISTS (SELECT 1 FROM pg_trigger WHERE tgname = 'trg_contrib_returns_updated_at') THEN
-    CREATE TRIGGER trg_contrib_returns_updated_at
-    BEFORE UPDATE ON campaign.contribution_returns
-    FOR EACH ROW EXECUTE FUNCTION campaign.set_updated_at();
-  END IF;
-END $$;
-'@ | Set-Content -Encoding UTF8 "db/sql/007_campaign_contrib.sql"
+COMMIT;
