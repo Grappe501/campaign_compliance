@@ -1,6 +1,5 @@
 // db/prisma/schema.prisma
-// Phase 1 baseline Prisma schema
-// Supports multi-schema Postgres with campaign isolation
+// Phase 2: Prisma schema for campaign compliance
 
 generator client {
   provider = "prisma-client-js"
@@ -9,30 +8,77 @@ generator client {
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
-
-  // Required by master_build.md
-  schemas  = ["public", "private", "campaign"]
 }
 
-// ===============================
-// CAMPAIGN SETTINGS (singleton)
-// ===============================
-model CampaignSettings {
-  id                  String   @id
-  sosFilingEntityId    String?  @map("sos_filing_entity_id")
-  sosFilingEntityName  String?  @map("sos_filing_entity_name")
+model CampaignContributor {
+  id               String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
 
-  timezone             String   @default("America/Chicago")
-  defaultElectionType  String?  @map("default_election_type")
-  mileageRate          Decimal  @default(0.70) @map("mileage_rate") @db.Numeric(6, 2)
+  contactId         String?  @db.Uuid
+  firstName         String?
+  lastName          String?
+  organizationName  String?
 
-  brandPrimary         String?  @map("brand_primary")
-  brandSecondary       String?  @map("brand_secondary")
-  brandLogoUrl         String?  @map("brand_logo_url")
+  email             String?
+  phone             String?
 
-  createdAt            DateTime @default(now()) @map("created_at")
-  updatedAt            DateTime @updatedAt @map("updated_at")
+  address1          String?
+  address2          String?
+  city              String?
+  state             String?
+  zip               String?
 
-  @@map("settings")
-  @@schema("campaign")
+  employer          String?
+  occupation        String?
+
+  createdAt         DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt         DateTime @default(now()) @db.Timestamptz(6)
+
+  contributions     CampaignContribution[]
+
+  @@map("campaign_contributor")
+  @@index([contactId], map: "idx_campaign_contributor_contact_id")
+  @@index([lastName, firstName], map: "idx_campaign_contributor_name")
+}
+
+model CampaignContribution {
+  id                    String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+
+  externalContributionId String  @unique @map("external_contribution_id")
+
+  contributorId          String?  @db.Uuid
+  contributor            CampaignContributor? @relation(fields: [contributorId], references: [id], onDelete: SetNull)
+
+  contributorName        String?
+  contributorType        String   @default("INDIVIDUAL") @map("contributor_type")
+
+  address1               String?
+  address2               String?
+  city                   String?
+  state                  String?
+  zip                    String?
+  employer               String?
+  occupation             String?
+
+  amountCents            Int      @map("amount_cents")
+  receivedAt             DateTime @map("received_at") @db.Date
+
+  paymentMethod          String   @default("UNKNOWN") @map("payment_method")
+  checkNumber            String?  @map("check_number")
+  inKindDescription      String?  @map("in_kind_description")
+
+  memo                   String?
+
+  isRefund               Boolean  @default(false) @map("is_refund")
+  isInKind               Boolean  @default(false) @map("is_in_kind")
+
+  status                 String   @default("DRAFT")
+  validationErrors       Json     @default("[]") @map("validation_errors")
+
+  createdAt              DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt              DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  @@map("campaign_contribution")
+  @@index([receivedAt], map: "idx_campaign_contribution_received_at")
+  @@index([status], map: "idx_campaign_contribution_status")
+  @@index([contributorId], map: "idx_campaign_contribution_contributor_id")
 }
